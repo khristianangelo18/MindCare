@@ -14,8 +14,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpenMobile = false, onCloseM
   const navigate = useNavigate();
 
   const handleLogout = async () => {
+    // 1. Check role before signing out
+    const isPractitioner = profile?.role === 'Specialist' || profile?.role === 'Admin';
+    const targetRoute = isPractitioner ? '/admin/login' : '/login';
+
+    // 2. Sign out of Supabase Auth
     await signOut();
-    navigate('/login');
+
+    // 3. Navigate to the matching login page
+    navigate(targetRoute);
+    
     if (onCloseMobile) onCloseMobile();
   };
 

@@ -2,14 +2,9 @@ import React, { useEffect, useState } from 'react';
 import {
   Calendar,
   Clock,
-  User,
-  CheckCircle2,
-  AlertCircle,
-  XCircle,
-  FileCheck,
-  TrendingUp,
   Search,
-  Filter
+  Filter,
+  Save
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -22,6 +17,9 @@ export const SpecialistDashboard: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [updatingId, setUpdatingId] = useState<number | null>(null);
+
+  // Tracks staged status changes before clicking Update
+  const [draftStatuses, setDraftStatuses] = useState<Record<number, AppointmentStatus>>({});
 
   const fetchAppointments = async () => {
     if (!user) return;
@@ -40,50 +38,18 @@ export const SpecialistDashboard: React.FC = () => {
           .order('appointment_date', { ascending: false });
 
         if (data && !error) {
-          setAppointments(data as unknown as Appointment[]);
+          const list = data as unknown as Appointment[];
+          setAppointments(list);
+          // Pre-fill initial draft statuses
+          const initialDrafts: Record<number, AppointmentStatus> = {};
+          list.forEach(a => {
+            initialDrafts[a.id] = a.status;
+          });
+          setDraftStatuses(initialDrafts);
         }
       } catch (err) {
         console.error('Error fetching specialist appointments:', err);
       }
-    } else {
-      // Local demo appointments
-      const demoList: Appointment[] = [
-        {
-          id: 101,
-          user_id: 'patient-1',
-          specialist_id: user.id,
-          appointment_date: new Date().toISOString().split('T')[0],
-          appointment_time: '10:00:00',
-          status: 'Confirmed',
-          notes: 'First session regarding anxiety and work pressure.',
-          patient: {
-            id: 'patient-1',
-            fullname: 'Michael Dungog',
-            email: 'michael@example.com',
-            role: 'Patient',
-            gender: 'Male',
-            age: 26
-          }
-        },
-        {
-          id: 102,
-          user_id: 'patient-2',
-          specialist_id: user.id,
-          appointment_date: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-          appointment_time: '14:00:00',
-          status: 'Pending',
-          notes: 'Follow-up after clinical assessment.',
-          patient: {
-            id: 'patient-2',
-            fullname: 'Dess Villaflor',
-            email: 'dess@example.com',
-            role: 'Patient',
-            gender: 'Female',
-            age: 23
-          }
-        }
-      ];
-      setAppointments(demoList);
     }
     setLoading(false);
   };
@@ -92,32 +58,43 @@ export const SpecialistDashboard: React.FC = () => {
     fetchAppointments();
   }, [user]);
 
-  const handleStatusChange = async (appointmentId: number, newStatus: AppointmentStatus) => {
+  // Stage status change locally
+  const handleDropdownDraftChange = (appointmentId: number, stagedStatus: AppointmentStatus) => {
+    setDraftStatuses(prev => ({
+      ...prev,
+      [appointmentId]: stagedStatus
+    }));
+  };
+
+  // Commit the update to Supabase on button click
+  const handleSaveStatus = async (appointmentId: number) => {
+    const targetStatus = draftStatuses[appointmentId];
+    if (!targetStatus) return;
+
     setUpdatingId(appointmentId);
 
     if (isSupabaseConfigured) {
       const { error } = await supabase
         .from('appointments')
-        .update({ status: newStatus })
+        .update({ status: targetStatus })
         .eq('id', appointmentId);
 
       if (error) {
         alert('Failed to update status: ' + error.message);
       } else {
         setAppointments(prev =>
-          prev.map(a => (a.id === appointmentId ? { ...a, status: newStatus } : a))
+          prev.map(a => (a.id === appointmentId ? { ...a, status: targetStatus } : a))
         );
       }
     } else {
       setAppointments(prev =>
-        prev.map(a => (a.id === appointmentId ? { ...a, status: newStatus } : a))
+        prev.map(a => (a.id === appointmentId ? { ...a, status: targetStatus } : a))
       );
     }
 
     setUpdatingId(null);
   };
 
-  // Stats
   const total = appointments.length;
   const confirmed = appointments.filter(a => a.status === 'Confirmed').length;
   const pending = appointments.filter(a => a.status === 'Pending').length;
@@ -127,12 +104,11 @@ export const SpecialistDashboard: React.FC = () => {
   const filtered = appointments.filter(a => {
     const matchesStatus = filterStatus === 'all' || a.status === filterStatus;
     const patientName = a.patient?.fullname?.toLowerCase() || '';
-    const matchesSearch = patientName.includes(searchQuery.toLowerCase());
-    return matchesStatus && matchesSearch;
+    return matchesStatus && patientName.includes(searchQuery.toLowerCase());
   });
 
   return (
-    <div className="space-y-8 pb-16">
+    <div className="lg:ml-[260px] p-6 lg:p-8 min-w-0 space-y-8 pb-16 transition-all duration-200">
       {/* Clinic Header */}
       <div className="bg-gradient-to-r from-teal-500/15 via-teal-500/5 to-transparent p-6 sm:p-8 rounded-3xl border border-teal-500/20">
         <span className="inline-block px-3 py-1 rounded-full bg-teal-100 dark:bg-teal-950/60 text-teal-800 dark:text-teal-300 text-xs font-semibold mb-2">
@@ -197,7 +173,6 @@ export const SpecialistDashboard: React.FC = () => {
 
       {/* Appointment Queue Table */}
       <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-gray-100 dark:border-zinc-800 shadow-sm overflow-hidden">
-        {/* Filter / Search Bar */}
         <div className="p-5 border-b border-gray-100 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -228,7 +203,7 @@ export const SpecialistDashboard: React.FC = () => {
 
         {loading ? (
           <div className="text-center py-16">
-            <div className="w-8 h-8 border-4 border-teal-500/30 border-t-teal-500 rounded-full animate-spin mx-auto mb-2"></div>
+            <div className="w-8 h-8 border-4 border-teal-500/30 border-t-teal-500 rounded-full animate-spin mx-auto mb-2" />
             <p className="text-xs text-gray-400">Loading patient schedule...</p>
           </div>
         ) : filtered.length === 0 ? (
@@ -243,72 +218,93 @@ export const SpecialistDashboard: React.FC = () => {
                   <th className="py-3 px-4">ID</th>
                   <th className="py-3 px-4">Patient</th>
                   <th className="py-3 px-4">Date & Time</th>
-                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Current Status</th>
                   <th className="py-3 px-4">Notes</th>
-                  <th className="py-3 px-4 text-right">Update Status</th>
+                  <th className="py-3 px-4 text-right">Update Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-zinc-800">
-                {filtered.map((apt) => (
-                  <tr key={apt.id} className="hover:bg-gray-50/50 dark:hover:bg-zinc-800/40 transition-colors">
-                    <td className="py-3 px-4 font-mono font-bold text-gray-400">
-                      #{apt.id}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div>
-                        <span className="font-bold text-gray-900 dark:text-white block">
-                          {apt.patient?.fullname || 'Patient'}
+                {filtered.map((apt) => {
+                  const currentDraft = draftStatuses[apt.id] || apt.status;
+                  const hasChanged = currentDraft !== apt.status;
+
+                  return (
+                    <tr key={apt.id} className="hover:bg-gray-50/50 dark:hover:bg-zinc-800/40 transition-colors">
+                      <td className="py-3 px-4 font-mono font-bold text-gray-400">
+                        #{apt.id}
+                      </td>
+                      <td className="py-3 px-4">
+                        <div>
+                          <span className="font-bold text-gray-900 dark:text-white block">
+                            {apt.patient?.fullname || 'Patient'}
+                          </span>
+                          <span className="text-[11px] text-gray-400 dark:text-zinc-500">
+                            {apt.patient?.email || 'N/A'} • {apt.patient?.gender || 'N/A'}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <Calendar className="w-3.5 h-3.5 text-teal-500" />
+                          <span>{apt.appointment_date}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 text-gray-400 mt-0.5">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>{apt.appointment_time}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span
+                          className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            apt.status === 'Confirmed'
+                              ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
+                              : apt.status === 'Pending'
+                              ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+                              : apt.status === 'Completed'
+                              ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
+                              : 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
+                          }`}
+                        >
+                          {apt.status}
                         </span>
-                        <span className="text-[11px] text-gray-400 dark:text-zinc-500">
-                          {apt.patient?.email || 'N/A'} • {apt.patient?.gender || 'N/A'}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center gap-1.5 font-medium">
-                        <Calendar className="w-3.5 h-3.5 text-teal-500" />
-                        <span>{apt.appointment_date}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 text-gray-400 mt-0.5">
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>{apt.appointment_time}</span>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`px-2.5 py-1 rounded-full text-[10px] font-bold ${
-                          apt.status === 'Confirmed'
-                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300'
-                            : apt.status === 'Pending'
-                            ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
-                            : apt.status === 'Completed'
-                            ? 'bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300'
-                            : 'bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300'
-                        }`}
-                      >
-                        {apt.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 max-w-xs truncate text-gray-500 dark:text-zinc-400">
-                      {apt.notes || '—'}
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <select
-                        value={apt.status}
-                        disabled={updatingId === apt.id}
-                        onChange={(e) =>
-                          handleStatusChange(apt.id, e.target.value as AppointmentStatus)
-                        }
-                        className="px-2.5 py-1.5 rounded-lg bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-xs font-semibold text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
-                      >
-                        <option value="Pending">Pending</option>
-                        <option value="Confirmed">Confirmed</option>
-                        <option value="Completed">Completed</option>
-                        <option value="Cancelled">Cancelled</option>
-                      </select>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="py-3 px-4 max-w-xs truncate text-gray-500 dark:text-zinc-400">
+                        {apt.notes || '—'}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <select
+                            value={currentDraft}
+                            disabled={updatingId === apt.id}
+                            onChange={(e) =>
+                              handleDropdownDraftChange(apt.id, e.target.value as AppointmentStatus)
+                            }
+                            className="px-2 py-1.5 rounded-lg bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-xs font-semibold text-gray-800 dark:text-zinc-200 focus:outline-none focus:border-teal-500 cursor-pointer"
+                          >
+                            <option value="Pending">Pending</option>
+                            <option value="Confirmed">Confirmed</option>
+                            <option value="Completed">Completed</option>
+                            <option value="Cancelled">Cancelled</option>
+                          </select>
+
+                          <button
+                            type="button"
+                            disabled={!hasChanged || updatingId === apt.id}
+                            onClick={() => handleSaveStatus(apt.id)}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1 transition-all ${
+                              hasChanged
+                                ? 'bg-teal-600 text-white hover:bg-teal-700 shadow-sm cursor-pointer'
+                                : 'bg-gray-100 dark:bg-zinc-800 text-gray-400 dark:text-zinc-600 cursor-not-allowed'
+                            }`}
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>{updatingId === apt.id ? 'Updating...' : 'Update'}</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

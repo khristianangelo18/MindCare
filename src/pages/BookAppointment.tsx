@@ -65,7 +65,7 @@ export const BookAppointment: React.FC = () => {
     setCurrentDateStr(now.toLocaleDateString('en-US', options));
   }, []);
 
-  // Fetch booked slots for the chosen specialist and date
+  // Fetch booked slots for the chosen specialist and date across all users
   useEffect(() => {
     if (!selectedSpecialist || !selectedDate) return;
 
@@ -80,7 +80,17 @@ export const BookAppointment: React.FC = () => {
             .in('status', ['Pending', 'Confirmed']);
 
           if (data && !error) {
-            setBookedTimes(data.map((d) => d.appointment_time));
+            const booked = data.map((d) => d.appointment_time);
+            setBookedTimes(booked);
+
+            // If the currently selected time is already occupied, fallback to first open slot
+            setSelectedTime((prevTime) => {
+              if (booked.includes(prevTime)) {
+                const firstAvailable = TIME_SLOTS.find(s => !booked.includes(s.value));
+                return firstAvailable ? firstAvailable.value : '';
+              }
+              return prevTime;
+            });
           }
         } catch (err) {
           console.error('Error fetching booked slots:', err);
@@ -140,6 +150,11 @@ export const BookAppointment: React.FC = () => {
       return;
     }
 
+    if (bookedTimes.includes(selectedTime)) {
+      setError('This appointment slot has just been reserved. Please pick another time.');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
@@ -155,8 +170,6 @@ export const BookAppointment: React.FC = () => {
       created_at: new Date().toISOString()
     };
 
-    let supabaseSuccess = false;
-
     if (isSupabaseConfigured) {
       try {
         const { error: insertError } = await supabase.from('appointments').insert({
@@ -170,20 +183,16 @@ export const BookAppointment: React.FC = () => {
         });
 
         if (insertError) {
-          console.warn('Supabase appointment insert error:', insertError.message);
-          // If error is UUID syntax error because column was created as UUID:
-          if (insertError.message.includes('uuid') || insertError.message.includes('foreign key')) {
-            console.info('Tip: Run `ALTER TABLE public.appointments DROP CONSTRAINT IF EXISTS appointments_specialist_id_fkey; ALTER TABLE public.appointments ALTER COLUMN specialist_id TYPE TEXT;` in Supabase SQL editor.');
-          }
-        } else {
-          supabaseSuccess = true;
+          setError('Failed to book appointment: ' + insertError.message);
+          setLoading(false);
+          return;
         }
       } catch (err: any) {
         console.warn('Network or DB error saving appointment to Supabase:', err);
       }
     }
 
-    // Always persist to local cache so user immediately sees their appointment confirmed
+    // Cache appointment locally
     const saved = localStorage.getItem(`mindcare-appointments-${user.id}`);
     const list: Appointment[] = saved ? JSON.parse(saved) : [];
     list.unshift(newAppointment);
@@ -480,23 +489,46 @@ export const BookAppointment: React.FC = () => {
               <h5 style={{ margin: '0 0 1rem 0', fontWeight: 600, color: 'var(--text-dark)', fontSize: '1rem' }}>
                 Available Times for {selectedDate}
               </h5>
-              <div className="timeslot-grid">
-                {TIME_SLOTS.map((slot) => {
-                  const isBooked = bookedTimes.includes(slot.value);
-                  const isSelected = selectedTime === slot.value;
 
-                  return (
-                    <button
-                      key={slot.value}
-                      disabled={isBooked}
-                      onClick={() => setSelectedTime(slot.value)}
-                      className={`timeslot-btn ${isSelected ? 'selected' : ''}`}
-                    >
-                      {slot.label} {isBooked && '(Booked)'}
-                    </button>
-                  );
-                })}
-              </div>
+              {bookedTimes.length >= TIME_SLOTS.length ? (
+                <div style={{
+                  padding: '1rem',
+                  color: '#dc2626',
+                  background: '#fee2e2',
+                  borderRadius: '8px',
+                  fontSize: '0.875rem',
+                  fontWeight: 500
+                }}>
+                  All appointment slots for this specialist are fully booked on this date. Please select another date.
+                </div>
+              ) : (
+                <div className="timeslot-grid">
+                  {TIME_SLOTS.map((slot) => {
+                    const isBooked = bookedTimes.includes(slot.value);
+                    const isSelected = selectedTime === slot.value;
+
+                    return (
+                      <button
+                        key={slot.value}
+                        type="button"
+                        disabled={isBooked}
+                        onClick={() => setSelectedTime(slot.value)}
+                        style={isBooked ? {
+                          opacity: 0.4,
+                          cursor: 'not-allowed',
+                          textDecoration: 'line-through',
+                          background: '#f3f4f6',
+                          borderColor: '#e5e7eb',
+                          color: '#9ca3af'
+                        } : {}}
+                        className={`timeslot-btn ${isSelected ? 'selected' : ''} ${isBooked ? 'disabled' : ''}`}
+                      >
+                        {slot.label} {isBooked && ' (Occupied)'}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </div>
 
@@ -505,7 +537,7 @@ export const BookAppointment: React.FC = () => {
             <button
               className="btn-book"
               onClick={handleBookAppointment}
-              disabled={loading || !selectedDate || !selectedTime}
+              disabled={loading || !selectedDate || !selectedTime || bookedTimes.includes(selectedTime)}
             >
               {loading ? 'Processing...' : isRescheduling ? 'Reschedule Appointment' : 'Book an Appointment'}
             </button>
